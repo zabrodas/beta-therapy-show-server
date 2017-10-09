@@ -2,13 +2,13 @@ package net.andrey_zabrodin.showserver;
 
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
+import android.os.Handler;
 import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
-import android.widget.ImageView;
-import android.widget.VideoView;
 
 import static android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
@@ -19,18 +19,29 @@ import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
  */
 public class FullscreenActivity extends AppCompatActivity {
     private View mContentView;
+    private SurfaceView surfaceView;
+    private Handler handler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        self=this;
-        super.onCreate(savedInstanceState);
+            super.onCreate(savedInstanceState);
+            setContentView(R.layout.activity_fullscreen);
+            handler = new Handler();
+            mContentView = findViewById(R.id.LinearLayout);
+            surfaceView = (SurfaceView) findViewById(R.id.surfaceView);
+            hideSystemUi();
+    }
 
-        setContentView(R.layout.activity_fullscreen);
+    @Override
+    protected void onResume() {
+        super.onResume();
+        synchronized(FullscreenActivity.class) {
+            if (self != null) {
 
-        mContentView = findViewById(R.id.LinearLayout);
-        hideSystemUi();
-
-        setUrl(getIntent());
+            }
+            self = this;
+            if (mlistener!=null) mlistener.onAvailable(surfaceView.getHolder());
+        }
     }
 
     @Override
@@ -63,64 +74,34 @@ public class FullscreenActivity extends AppCompatActivity {
     }
 
     static private FullscreenActivity self=null;
-
+    static interface SurfaceHolderEventListener {
+        void onAvailable(SurfaceHolder sh);
+        void onDestroyed();
+    }
+    static SurfaceHolderEventListener mlistener=null;
 
     @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        self=null;
+    protected void onPause() {
+        synchronized(FullscreenActivity.class) {
+            if (self!=null) {
+                if (mlistener!=null) mlistener.onDestroyed();
+                self = null;
+            }
+        }
+        super.onPause();
     }
 
-    static public void activateFullScreenActiity(Context context, Intent intent) {
-        if (self==null) {
-            intent.setClass(context, FullscreenActivity.class);
-            intent.addFlags(FLAG_ACTIVITY_NEW_TASK|FLAG_ACTIVITY_CLEAR_TOP);
-            context.startActivity(intent);
-        } else {
-            self.setUrl(intent);
-            self.setVisible(true);
+    static public void getSurfaceHolder(Context context, SurfaceHolderEventListener listener) {
+        synchronized(FullscreenActivity.class) {
+            mlistener=listener;
+            //if (self == null) {
+                Intent intent=new Intent();
+                intent.setClass(context, FullscreenActivity.class);
+                intent.addFlags(FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP);
+                context.startActivity(intent);
+            //} else {
+            //    mlistener.onAvailable(self.surfaceView.getHolder());
+            //}
         }
     }
-
-    private void setUrl(Intent intent) {
-        ImageView iv = (ImageView) findViewById(R.id.imageView);
-        VideoView vv = (VideoView) findViewById(R.id.videoView);
-
-        String it = intent.getType();
-        switch (it) {
-            case "image": {
-                Uri uri = intent.getData();
-                if (uri!=null) {
-                    iv.setImageURI(uri);
-                    vv.stopPlayback();
-                    vv.setVisibility(View.GONE);
-                    iv.setVisibility(View.VISIBLE);
-                }
-                break;
-            }
-            case "video": {
-                Uri uri = intent.getData();
-                if (uri!=null) {
-                    vv.setVideoURI(uri);
-                    vv.setVisibility(View.VISIBLE);
-                    iv.setVisibility(View.GONE);
-                    vv.start();
-                } else {
-                    vv.pause();
-                }
-                break;
-            }
-            case "pauseVideo": {
-                vv.pause();
-                break;
-            }
-            case "continueVideo": {
-                vv.start();
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
 }

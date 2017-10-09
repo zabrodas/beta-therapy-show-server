@@ -136,6 +136,7 @@ public class MainActivity extends AppCompatActivity {
         }
         readSettings();
         indicateServiceStatus();
+        onClickStart.onClick(startButton);
     }
 
 }

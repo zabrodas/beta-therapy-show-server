@@ -1,15 +1,17 @@
 package net.andrey_zabrodin.showserver;
 
 import android.content.Context;
-import android.content.Intent;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.annotation.RequiresApi;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.SurfaceHolder;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -30,6 +32,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 import static android.media.AudioManager.FLAG_SHOW_UI;
+import static java.lang.Thread.sleep;
 
 class SimpleWebServer implements Runnable {
 
@@ -57,7 +60,7 @@ class SimpleWebServer implements Runnable {
      */
     private ServerSocket mServerSocket;
     private File[] cached_filelist=null;
-    private MediaPlayer mplayer;
+    private MediaPlayerExt[] mplayers=new MediaPlayerExt[2];
     private AudioManager audioManager;
 
     SimpleWebServer(Context context, Handler handler, int port, String rootdir) {
@@ -96,13 +99,16 @@ class SimpleWebServer implements Runnable {
             }
         } catch (SocketException e) {
             // The server was stopped; ignore.
-        } catch (IOException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Web server error.", e);
         } finally {
-            if (mplayer!=null) {
-                mplayer.reset();
-                mplayer.release();
-                mplayer=null;
+            for (int i=0; i<mplayers.length; i++) {
+                MediaPlayerExt mplayer = mplayers[i];
+                if (mplayer != null) {
+                    mplayer.reset();
+                    mplayer.release();
+                    mplayers[i] = null;
+                }
             }
         }
     }
@@ -115,7 +121,7 @@ class SimpleWebServer implements Runnable {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
-    private void handle(Socket socket) throws IOException {
+    private void handle(Socket socket) throws Exception {
         BufferedReader reader = null;
         PrintStream output = null;
         try {
@@ -142,7 +148,7 @@ class SimpleWebServer implements Runnable {
                 return;
             }
 
-            ReplyContent reply = loadContent(route);
+            ReplyContent reply = proceedRequest(route);
             if (null == reply) {
                 writeServerError(output);
                 return;
@@ -194,130 +200,237 @@ class SimpleWebServer implements Runnable {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
-    private ReplyContent loadContent(String path) throws IOException {
-        if (path.startsWith("?")) {
-            int eqi = path.indexOf('=');
-            String pn, pv;
-            if (eqi<0) {
-                pn = path.substring(1);
-                pv = "";
+    private ReplyContent proceedRequest(String path)  {
+        try {
+            if (path.startsWith("?")) {
+                int eqi = path.indexOf('=');
+                String pn, pv;
+                if (eqi < 0) {
+                    pn = path.substring(1);
+                    pv = "";
+                } else {
+                    pn = path.substring(1, eqi);
+                    pv = URLDecoder.decode(path.substring(eqi + 1), "UTF-8");
+                }
+                switch (pn) {
+                    case "mfilelist":
+                        return getFileList(pv);
+
+                    case "setMainVolume":
+                        return doSetMainVolume(pv);
+                    case "getMainVolume":
+                        return doGetMainVolume();
+
+                    case "play": // ?play=<channel>,<fileindex>
+                        return doPlayFile(pv);
+
+                    case "stop":
+                    case "pause":
+                    case "continue":
+                    case "setVolume":
+                    case "getVolume":
+                        return doCommandOnChannel(pn, pv);
+                    default:
+                        throw new Exception("Unknown request");
+                }
             } else {
-                pn = path.substring(1, eqi);
-                pv = URLDecoder.decode(path.substring(eqi + 1), "UTF-8");
+                if (path.equals("")) path = "index.html";
+                return loadFile(path);
             }
-            switch (pn) {
-                case "mfilelist":
-                    return getFileList(pv);
-
-                case "pauseVideo": {
-                    ReplyContent reply = new ReplyContent();
-                    try {
-                        final Intent intent = new Intent();
-                        intent.setDataAndType(null, "pauseVideo");
-                        mhandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                FullscreenActivity.activateFullScreenActiity(mcontext,intent);
-                            }
-                        });
-                    } catch (Exception e) {
-                        reply.code = 500;
-                        reply.bytes = e.toString().getBytes();
-                    }
-                    return reply;
-                }
-                case "continueVideo":{
-                    ReplyContent reply = new ReplyContent();
-                    try {
-                        final Intent intent = new Intent();
-                        intent.setDataAndType(null, "continueVideo");
-                        mhandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                FullscreenActivity.activateFullScreenActiity(mcontext,intent);
-                            }
-                        });
-                    } catch (Exception e) {
-                        reply.code = 500;
-                        reply.bytes = e.toString().getBytes();
-                    }
-                    return reply;
-                }
-                case "stopVideo":
-                    return onPlayMediaRequest("video","");
-                case "pauseAudio":{
-                    ReplyContent reply=new ReplyContent();
-                    if (mplayer != null) {
-                        try {
-                            mplayer.pause();
-                        } catch (Exception e) {
-                            reply.code=400;
-                            reply.bytes=e.toString().getBytes();
-                        }
-                    }
-                    return reply;
-                }
-                case "continueAudio": {
-                    ReplyContent reply=new ReplyContent();
-                    if (mplayer != null) {
-                        try {
-                            mplayer.start();
-                        } catch (Exception e) {
-                            reply.code=400;
-                            reply.bytes=e.toString().getBytes();
-                        }
-                    }
-                    return reply;
-                }
-                case "stopAudio":
-                    return onPlayMediaRequest("audio","");
-                case "volumeAudio": {
-                    ReplyContent reply=new ReplyContent();
-                    if (mplayer != null) {
-                        try {
-                            Float v = Float.valueOf(pv);
-                            mplayer.setVolume(v, v);
-                        } catch (Exception e) {
-                            reply.code=400;
-                            reply.bytes=e.toString().getBytes();
-                        }
-                    }
-                    return reply;
-                }
-                case "volumeVideo":{
-                    ReplyContent reply = new ReplyContent();
-                    reply.code=500;
-                    reply.bytes="Not implemented".getBytes();
-                    return reply;
-                }
-                case "volume": {
-                    ReplyContent reply = new ReplyContent();
-                    try {
-                        if (audioManager == null) audioManager = (AudioManager) mcontext.getSystemService(Context.AUDIO_SERVICE);
-                        Float v = Float.valueOf(pv);
-                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (int) (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)*v),FLAG_SHOW_UI);
-                    } catch (Exception e) {
-                        reply.code = 400;
-                        reply.bytes = e.toString().getBytes();
-                    }
-                    return reply;
-                }
-
-                case "video":
-                case "audio":
-                case "image":
-                    return onPlayMediaRequest(pn,pv);
-                default: {
-                    ReplyContent reply = new ReplyContent();
-                    reply.code=400;
-                    reply.bytes="Wrong media type".getBytes();
-                    return reply;
-                }
-            }
-        } else {
-            if (path.equals("")) path="index.html";
-            return loadFile(path);
+        } catch (Exception e) {
+            ReplyContent reply = new ReplyContent();
+            reply.code = 400;
+            reply.bytes = e.toString().getBytes();
+            return reply;
         }
+    }
+
+    @NonNull
+    private ReplyContent doGetMainVolume() {
+        ReplyContent reply = new ReplyContent();
+        try {
+            if (audioManager == null) audioManager = (AudioManager) mcontext.getSystemService(Context.AUDIO_SERVICE);
+            float v = (float) audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            v/=audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            reply.bytes=String.format(Locale.US,"{\"volume\": %f}",v).getBytes();
+        } catch (Exception e) {
+            reply.code = 400;
+            reply.bytes = e.toString().getBytes();
+        }
+        return reply;
+    }
+
+    @Nullable
+    private ReplyContent doSetMainVolume(String pv) {
+        try {
+            if (audioManager == null) audioManager = (AudioManager) mcontext.getSystemService(Context.AUDIO_SERVICE);
+            Float v = Float.valueOf(pv);
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (int) (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)*v+0.5),FLAG_SHOW_UI);
+        } catch (Exception e) {
+            ReplyContent reply = new ReplyContent();
+            reply.code = 400;
+            reply.bytes = e.toString().getBytes();
+            return reply;
+        }
+        return doGetMainVolume();
+    }
+
+    @NonNull
+    private ReplyContent doCommandOnChannel(String pn, String pv) {
+        ReplyContent reply = new ReplyContent();
+        try {
+            int channel;
+            float volume= (float) 0.0;
+            if (pn.equals("setVolume")) {
+                String[] pvs = pv.split(",");
+                if (pvs.length != 2) throw new Exception("Wrong request");
+                channel = Integer.valueOf(pvs[0]);
+                volume = Float.valueOf(pvs[1]);
+            } else {
+                channel=Integer.valueOf(pv);
+            }
+            if (channel<0 || channel>=mplayers.length) throw new Exception("Wrong channel number");
+            MediaPlayerExt mplayer = getMediaPlayer(channel);
+            switch (pn) {
+                case "stop":
+                    mplayer.stop();
+                    break;
+                case "pause":
+                    mplayer.pause();
+                    break;
+                case "continue":
+                    mplayer.start();
+                    break;
+                case "setVolume":
+                    mplayer.setVolume(volume,volume);
+                    break;
+                case "getVolume":
+                    throw new Exception("Not implemented");
+            }
+            reply.bytes = "Activity started".getBytes();
+        } catch (Exception e) {
+            reply.code = 500;
+            reply.bytes = e.toString().getBytes();
+        }
+        return reply;
+    }
+
+    private MediaPlayerExt getMediaPlayer(int channel) {
+        MediaPlayerExt mplayer = mplayers[channel];
+        if (mplayer==null) {
+            mplayer=mplayers[channel]=new MediaPlayerExt();
+        }
+        return mplayer;
+    }
+
+    SurfaceHolder surfaceHolder=null;
+    boolean surfaceCreated=false;
+    MediaPlayerExt awaitingForSurface=null;
+    FullscreenActivity.SurfaceHolderEventListener surfaceHolderEventListener= new FullscreenActivity.SurfaceHolderEventListener() {
+        @Override
+        public void onAvailable(SurfaceHolder sh) {
+            synchronized (SimpleWebServer.this) {
+                // if (surfaceHolder != sh) {
+                    surfaceHolder = sh;
+                    surfaceHolder.addCallback(surfaceEventListener);
+                // }
+            }
+        }
+        @Override
+        public void onDestroyed() {
+            synchronized (SimpleWebServer.this) {
+                if (surfaceHolder!=null) {
+                    surfaceHolder.removeCallback(surfaceEventListener);
+                    surfaceHolder = null;
+                    surfaceCreated=false;
+                    if (awaitingForSurface != null) {
+                        awaitingForSurface.setDisplay(null);
+                    }
+                }
+            }
+        }
+    };
+    SurfaceHolder.Callback surfaceEventListener=new SurfaceHolder.Callback() {
+        @Override
+        public void surfaceCreated(SurfaceHolder holder) {
+            synchronized (SimpleWebServer.this) {
+                surfaceCreated=true;
+                if (awaitingForSurface != null) {
+                    awaitingForSurface.setDisplay(surfaceHolder);
+                }
+            }
+        }
+
+        @Override
+        public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            synchronized (SimpleWebServer.this) {
+                surfaceCreated=true;
+                if (awaitingForSurface != null) {
+                    awaitingForSurface.setDisplay(surfaceHolder);
+                }
+            }
+        }
+
+        @Override
+        public void surfaceDestroyed(SurfaceHolder holder) {
+            surfaceCreated=false;
+            if (awaitingForSurface != null) {
+                awaitingForSurface.setDisplay(null);
+            }
+        }
+    };
+
+    void assignSurface(MediaPlayerExt mp) {
+        mhandler.post(new Runnable() {
+            @Override
+            public void run() {
+                FullscreenActivity.getSurfaceHolder(mcontext,surfaceHolderEventListener);
+            }
+        });
+        synchronized (SimpleWebServer.this) {
+            if (awaitingForSurface==mp) return;
+            if (awaitingForSurface != null) {
+                awaitingForSurface.setDisplay(null);
+                awaitingForSurface = null;
+            }
+            awaitingForSurface = mp;
+            if (surfaceHolder!=null && surfaceCreated) {
+                awaitingForSurface.setDisplay(surfaceHolder);
+            } else {
+                awaitingForSurface.setDisplay(null);
+            }
+        }
+    }
+
+    @NonNull
+    private ReplyContent doPlayFile(String pv) {
+        ReplyContent reply = new ReplyContent();
+        try {
+            String[] pvs = pv.split(",");
+            if (pvs.length != 2) throw new Exception("Wrong request");
+            int channel = Integer.valueOf(pvs[0]);
+            int fileIndex = Integer.valueOf(pvs[1]);
+            if (cached_filelist==null) {
+                String err = buid_filelist();
+                if (err != null) throw new Exception(err);
+                if (cached_filelist == null) throw new Exception("Can't build list of files");
+            }
+            if (fileIndex< 0 || fileIndex>= cached_filelist.length) throw new Exception("Wrong index value");
+            File fileToPlay = cached_filelist[fileIndex];
+            final MediaPlayerExt mplayer = getMediaPlayer(channel);
+            mplayer.reset();
+            String filename = fileToPlay.toString();
+            mplayer.setSourceFile(filename);
+            if (filename.endsWith(".mp4") || filename.endsWith("jpg") || filename.endsWith("png") || filename.endsWith("bmp")) {
+                assignSurface(mplayer);
+            }
+            mplayer.prepare();
+            mplayer.start();
+        } catch (Exception e) {
+            reply.code = 400;
+            reply.bytes = e.toString().getBytes();
+        }
+        return reply;
     }
 
     private ReplyContent getFileList(String pv) {
@@ -352,88 +465,6 @@ class SimpleWebServer implements Runnable {
             reply.bytes=e.toString().getBytes();
             return reply;
         }
-    }
-
-    private ReplyContent onPlayMediaRequest(String action, String fileIndex) {
-        ReplyContent reply=new ReplyContent();
-        if (cached_filelist==null) {
-            String err = buid_filelist();
-            if (err != null) {
-                reply.code = 404;
-                reply.bytes = err.getBytes();
-                return reply;
-            }
-            if (cached_filelist == null) {
-                reply.code = 500;
-                reply.bytes = "Can't build list of files".getBytes();
-                return reply;
-            }
-        }
-
-        File fileToPlay=null;
-        if (!fileIndex.equals("")) {
-            Integer fi;
-            try {
-                fi = Integer.valueOf(fileIndex);
-            } catch (NumberFormatException e) {
-                reply.code = 400;
-                reply.bytes = e.toString().getBytes();
-                return reply;
-            }
-            if (fi < 0 || fi >= cached_filelist.length) {
-                reply.code = 404;
-                reply.bytes = "Wrong index value".getBytes();
-                return reply;
-            }
-            fileToPlay = cached_filelist[fi];
-        }
-
-        switch (action) {
-            case "image":
-            case "video":
-                try {
-                    final Intent intent = new Intent();
-                    if (fileToPlay!=null) {
-                        intent.setDataAndType(Uri.fromFile(fileToPlay), action);
-                    } else {
-                        intent.setDataAndType(null, action);
-                    }
-                    mhandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            FullscreenActivity.activateFullScreenActiity(mcontext,intent);
-                        }
-                    });
-                    reply.bytes = "Activity started".getBytes();
-                } catch (Exception e) {
-                    reply.code = 500;
-                    reply.bytes = e.toString().getBytes();
-                }
-                break;
-            case "audio" : {
-                if (mplayer==null) mplayer=new MediaPlayer();
-                mplayer.reset();
-                if (fileToPlay!=null) {
-                    try {
-                        mplayer.setDataSource(mcontext, Uri.fromFile(fileToPlay));
-                        mplayer.prepare();
-                        mplayer.start();
-                    } catch (IOException e) {
-                        reply.code = 404;
-                        reply.bytes = e.toString().getBytes();
-                        return reply;
-                    }
-                }
-                reply.bytes = "Activity started".getBytes();
-                break;
-            }
-            default:
-                reply.code=400;
-                reply.bytes="Wrong action".getBytes();
-                return reply;
-        }
-
-        return reply;
     }
 
     private ReplyContent loadFile(String filename) throws IOException {
