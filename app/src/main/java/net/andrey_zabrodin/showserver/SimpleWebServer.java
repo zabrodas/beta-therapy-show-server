@@ -18,6 +18,7 @@ import org.json.JSONException;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FilenameFilter;
@@ -470,7 +471,7 @@ class SimpleWebServer implements Runnable {
     private ReplyContent loadFile(String filename) throws IOException {
         ReplyContent reply=new ReplyContent();
 
-        FileReader input = null;
+        FileInputStream input = null;
         String filename1 = filename.replaceAll("[^A-Za-z0-9\\-_.]", "");
         if (Objects.equals(filename1, ".") || Objects.equals(filename1, "..")) {
             reply.code=400;
@@ -480,16 +481,16 @@ class SimpleWebServer implements Runnable {
         try {
             File sf=new File(filename1);
             long len = sf.length();
-            if (len<0 || len>100000) {
+            if (len<0 || len>200000) {
                 reply.code=500;
                 reply.bytes="Too big file".getBytes();
                 return reply;
             }
-            input = new FileReader(sf);
-            char[] buffer = new char[(int) len];
+            input = new FileInputStream(sf);
+            byte[] buffer = new byte[(int) len];
             int actlen=input.read(buffer);
             input.close();
-            reply.bytes=new String(buffer,0,actlen).getBytes();
+            reply.bytes=buffer;
             reply.contentType=detectMimeType(filename1);
             return reply;
         } catch (FileNotFoundException e) {
@@ -518,6 +519,12 @@ class SimpleWebServer implements Runnable {
             return "application/javascript";
         } else if (fileName.endsWith(".css")) {
             return "text/css";
+        } else if (fileName.endsWith(".png")) {
+            return "image/png";
+        } else if (fileName.endsWith(".jpg")) {
+            return "image/jpeg";
+        } else if (fileName.endsWith(".gif")) {
+            return "image/gif";
         } else {
             return "application/octet-stream";
         }
