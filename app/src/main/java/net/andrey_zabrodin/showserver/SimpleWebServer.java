@@ -184,8 +184,9 @@ class SimpleWebServer implements Runnable {
 
     private String buid_filelist() {
         try {
-            File rd = new File(mrootdir);
-            if (!rd.isDirectory()) return String.format("%s is not a directory", mrootdir);
+            String resDir = mrootdir + "/media";
+            File rd = new File(resDir);
+            if (!rd.isDirectory()) return String.format("%s is not a directory", resDir);
             cached_filelist = rd.listFiles(new FilenameFilter() {
                 @Override
                 public boolean accept(File dir, String name) {
@@ -481,7 +482,7 @@ class SimpleWebServer implements Runnable {
         try {
             File sf=new File(filename1);
             long len = sf.length();
-            if (len<0 || len>200000) {
+            if (len<0 || len>600000) {
                 reply.code=500;
                 reply.bytes="Too big file".getBytes();
                 return reply;
