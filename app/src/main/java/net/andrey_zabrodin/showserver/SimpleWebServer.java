@@ -496,7 +496,7 @@ class SimpleWebServer implements Runnable {
             return reply;
         } catch (FileNotFoundException e) {
             reply.code=404;
-            reply.bytes="Not found".getBytes();
+            reply.bytes=e.getLocalizedMessage().getBytes();
             return reply;
         } finally {
             if (null != input) {
